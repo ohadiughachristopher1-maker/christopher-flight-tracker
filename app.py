@@ -2,61 +2,29 @@ from flask import Flask, jsonify, send_from_directory, request
 from flask_cors import CORS
 import requests
 import time
-from datetime import datetime, timezone
 
 app = Flask(__name__)
 CORS(app)
 
-OPENSKY_URL = "https://opensky-network.org/api/states/all"
-
-AIRLINES = {
-    "APK": "Air Peace",
-    "AEN": "Aero Contractors",
-    "MEP": "Med-View Airline",
-    "NGR": "Nigeria Air",
-    "DAN": "Dana Air",
-    "KQA": "Kenya Airways",
-    "ETH": "Ethiopian Airlines",
-    "RWD": "RwandAir",
-    "BAW": "British Airways",
-    "AFR": "Air France",
-    "DLH": "Lufthansa",
-    "KLM": "KLM",
-    "BAW": "British Airways",
-    "UAE": "Emirates",
-    "QTR": "Qatar Airways",
-    "ETD": "Etihad Airways",
-    "THY": "Turkish Airlines",
-    "AAL": "American Airlines",
-    "UAL": "United Airlines",
-    "DAL": "Delta Air Lines",
-    "SIA": "Singapore Airlines",
-    "CPA": "Cathay Pacific",
-}
+ADSB_URL = "https://api.adsb.lol/v2/lat/{lat}/lon/{lon}/dist/{dist}"
 
 REGIONS = {
     "nigeria": {
-        "lamin": 4.0,
-        "lomin": 2.5,
-        "lamax": 14.0,
-        "lomax": 15.0
+        "lat": 9.08,
+        "lon": 8.67,
+        "dist": 600
     },
     "africa": {
-        "lamin": -35.0,
-        "lomin": -20.0,
-        "lamax": 38.0,
-        "lomax": 55.0
+        "lat": 5.0,
+        "lon": 20.0,
+        "dist": 2500
     },
-    "world": {}
+    "world": {
+        "lat": 20.0,
+        "lon": 0.0,
+        "dist": 5000
+    }
 }
-
-
-def get_airline(callsign):
-    if not callsign:
-        return "Unknown airline"
-
-    prefix = callsign.strip().split()[0][:3].upper()
-    return AIRLINES.get(prefix, "Unknown airline")
 
 
 def get_status(on_ground, vertical_rate):
@@ -66,13 +34,19 @@ def get_status(on_ground, vertical_rate):
     if vertical_rate is None:
         return "Cruising"
 
-    if vertical_rate > 0.5:
+    if vertical_rate > 100:
         return "Climbing"
 
-    if vertical_rate < -0.5:
+    if vertical_rate < -100:
         return "Descending"
 
     return "Cruising"
+
+
+def clean_callsign(value):
+    if not value:
+        return "N/A"
+    return value.strip()
 
 
 @app.route("/")
@@ -84,7 +58,8 @@ def home():
 def health():
     return jsonify({
         "status": "online",
-        "project": "Christopher Flight Tracker"
+        "project": "Christopher Flight Tracker",
+        "data_source": "ADSB.lol"
     })
 
 
@@ -92,75 +67,104 @@ def health():
 def flights():
     region = request.args.get("region", "world").lower()
 
-    params = REGIONS.get(region, REGIONS["world"])
+    if region not in REGIONS:
+        region = "world"
+
+    settings = REGIONS[region]
 
     try:
-        response = requests.get(
-            OPENSKY_URL,
-            params=params,
-            timeout=30
+        url = ADSB_URL.format(
+            lat=settings["lat"],
+            lon=settings["lon"],
+            dist=settings["dist"]
         )
 
+        response = requests.get(url, timeout=30)
         response.raise_for_status()
+
         data = response.json()
 
         aircraft = []
 
-        for state in data.get("states") or []:
-            if not state:
-                continue
-
-            callsign = (state[1] or "").strip()
-            longitude = state[5]
-            latitude = state[6]
-            altitude = state[7]
-            on_ground = state[8]
-            velocity = state[9]
-            heading = state[10]
-            vertical_rate = state[11]
+        for state in data.get("ac", []):
+            latitude = state.get("lat")
+            longitude = state.get("lon")
 
             if latitude is None or longitude is None:
                 continue
 
+            callsign = clean_callsign(state.get("flight"))
+
+            altitude = state.get("alt_baro")
+            speed = state.get("gs")
+            vertical_rate = state.get("baro_rate")
+            heading = state.get("track")
+
+            on_ground = (
+                altitude == "ground"
+                or state.get("ground") is True
+            )
+
+            if isinstance(altitude, str):
+                altitude_ft = None
+                altitude_m = None
+            else:
+                altitude_ft = round(altitude) if altitude is not None else None
+                altitude_m = (
+                    round(altitude * 0.3048)
+                    if altitude is not None
+                    else None
+                )
+
             aircraft.append({
-                "icao24": state[0],
-                "callsign": callsign or "N/A",
-                "origin_country": state[2] or "Unknown",
+                "icao24": state.get("hex", "").lower(),
+                "callsign": callsign,
+                "registration": state.get("r", "Unknown"),
+                "aircraft_type": state.get("t", "Unknown"),
+                "origin_country": "Unknown",
                 "longitude": longitude,
                 "latitude": latitude,
-                "altitude_m": altitude,
-                "altitude_ft": round(altitude * 3.28084) if altitude else None,
-                "on_ground": bool(on_ground),
-                "velocity_ms": velocity,
-                "speed_knots": round(velocity * 1.94384) if velocity else None,
-                "heading": heading,
-                "vertical_rate_ms": vertical_rate,
-                "vertical_rate_fpm": round(vertical_rate * 196.8504)
-                    if vertical_rate is not None else None,
-                "status": get_status(on_ground, vertical_rate),
-                "airline": get_airline(callsign),
-                "departure": state[2] or "Unknown",
-                "destination": "Not available from live ADS-B data"
+                "altitude_ft": altitude_ft,
+                "altitude_m": altitude_m,
+                "speed_knots": round(speed) if speed is not None else None,
+                "heading": round(heading, 1) if heading is not None else None,
+                "vertical_rate_fpm": (
+                    round(vertical_rate)
+                    if vertical_rate is not None
+                    else None
+                ),
+                "status": get_status(
+                    on_ground,
+                    vertical_rate
+                ),
+                "airline": callsign[:3] if callsign != "N/A" else "Unknown",
+                "departure": "Not available",
+                "destination": "Not available"
             })
 
         stats = {
             "total": len(aircraft),
             "climbing": sum(
-                1 for a in aircraft if a["status"] == "Climbing"
+                1 for a in aircraft
+                if a["status"] == "Climbing"
             ),
             "descending": sum(
-                1 for a in aircraft if a["status"] == "Descending"
+                1 for a in aircraft
+                if a["status"] == "Descending"
             ),
             "cruising": sum(
-                1 for a in aircraft if a["status"] == "Cruising"
+                1 for a in aircraft
+                if a["status"] == "Cruising"
             ),
             "on_ground": sum(
-                1 for a in aircraft if a["status"] == "On ground"
+                1 for a in aircraft
+                if a["status"] == "On ground"
             )
         }
 
         return jsonify({
             "success": True,
+            "source": "ADSB.lol",
             "region": region,
             "timestamp": int(time.time()),
             "statistics": stats,
@@ -170,6 +174,7 @@ def flights():
     except Exception as e:
         return jsonify({
             "success": False,
+            "source": "ADSB.lol",
             "error": str(e),
             "statistics": {
                 "total": 0,
@@ -182,78 +187,40 @@ def flights():
         }), 500
 
 
-@app.route("/api/route/<icao24>")
-def route(icao24):
+@app.route("/api/aircraft/<icao24>")
+def aircraft_details(icao24):
     try:
         icao24 = icao24.lower().strip()
 
-        now = int(time.time())
-
-        # Search the previous 24 hours.
-        begin = now - 86400
-        end = now
-
-        url = "https://opensky-network.org/api/flights/aircraft"
+        url = "https://api.adsb.lol/v2/hex/" + icao24
 
         response = requests.get(
             url,
-            params={
-                "icao24": icao24,
-                "begin": begin,
-                "end": end
-            },
             timeout=30
         )
 
-        if response.status_code == 404:
-            return jsonify({
-                "success": True,
-                "available": False,
-                "message": "No route information is currently available."
-            })
-
         response.raise_for_status()
 
-        flights = response.json()
+        data = response.json()
 
-        if not flights:
+        aircraft = data.get("ac", [])
+
+        if not aircraft:
             return jsonify({
-                "success": True,
-                "available": False,
-                "message": "No route information is currently available."
-            })
+                "success": False,
+                "message": "Aircraft not found"
+            }), 404
 
-        # Use the most recent flight record.
-        flight = flights[-1]
-
-        departure = flight.get("estDepartureAirport")
-        arrival = flight.get("estArrivalAirport")
-        callsign = flight.get("callsign")
+        plane = aircraft[0]
 
         return jsonify({
             "success": True,
-            "available": bool(departure or arrival),
-            "icao24": icao24,
-            "callsign": callsign.strip() if callsign else None,
-            "departure": departure,
-            "arrival": arrival,
-            "departure_candidates": flight.get(
-                "departureAirportCandidatesCount"
-            ),
-            "arrival_candidates": flight.get(
-                "arrivalAirportCandidatesCount"
-            ),
-            "message": (
-                "Route information found."
-                if departure or arrival
-                else "Route information unavailable."
-            )
+            "aircraft": plane
         })
 
     except Exception as e:
         return jsonify({
             "success": False,
-            "available": False,
             "error": str(e)
         }), 500
 
