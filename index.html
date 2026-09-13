@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>Christopher Flight Tracker</title>
+
+<link
+rel="stylesheet"
+href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+/>
+
+<style>
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background: #07111f;
+    color: white;
+}
+
+header {
+    padding: 15px;
+    background: #0b1c31;
+    border-bottom: 1px solid #24415f;
+}
+
+.logo {
+    font-size: 24px;
+    font-weight: bold;
+}
+
+.logo span {
+    color: #16a8ff;
+}
+
+.subtitle {
+    color: #9fb3c8;
+    font-size: 13px;
+    margin-top: 4px;
+}
+
+.controls {
+    display: flex;
+    gap: 8px;
+    padding: 10px;
+    overflow-x: auto;
+    background: #0a1728;
+}
+
+button {
+    border: 1px solid #29445f;
+    background: #12263d;
+    color: white;
+    padding: 10px 15px;
+    border-radius: 8px;
+    white-space: nowrap;
+    font-size: 14px;
+}
+
+button.active {
+    background: #078bd0;
+}
+
+.search {
+    flex: 1;
+    min-width: 160px;
+    border: 1px solid #29445f;
+    background: #12263d;
+    color: white;
+    padding: 10px;
+    border-radius: 8px;
+}
+
+.stats {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 7px;
+    padding: 8px;
+    background: #07111f;
+}
+
+.card {
+    background: #102238;
+    border: 1px solid #203d59;
+    border-radius: 10px;
+    padding: 10px;
+    text-align: center;
+}
+
+.card .number {
+    font-size: 22px;
+    font-weight: bold;
+    margin-top: 5px;
+}
+
+.card .label {
+    color: #9fb3c8;
+    font-size: 11px;
+}
+
+#map {
+    height: calc(100vh - 270px);
+    min-height: 450px;
+}
+
+.panel {
+    position: fixed;
+    z-index: 1000;
+    right: 12px;
+    bottom: 15px;
+    width: 310px;
+    max-width: calc(100% - 24px);
+    background: rgba(7, 17, 31, 0.96);
+    border: 1px solid #2d587d;
+    border-radius: 14px;
+    padding: 15px;
+    display: none;
+    box-shadow: 0 10px 30px rgba(0,0,0,.4);
+}
+
+.panel h2 {
+    margin: 0 0 10px;
+    font-size: 19px;
+}
+
+.row {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    border-bottom: 1px solid #1e344a;
+    padding: 7px 0;
+}
+
+.row span:first-child {
+    color: #91a8bd;
+}
+
+.status {
+    color: #16a8ff;
+    font-weight: bold;
+}
+
+.close {
+    float: right;
+    cursor: pointer;
+    font-size: 20px;
+}
+
+.loading {
+    position: fixed;
+    z-index: 2000;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: #0b1c31;
+    padding: 18px 25px;
+    border-radius: 12px;
+    display: none;
+}
+</style>
+</head>
+
+<body>
+
+<header>
+    <div class="logo">✈ <span>CHRISTOPHER</span> FLIGHT TRACKER</div>
+    <div class="subtitle">Live aircraft monitoring system</div>
+</header>
+
+<div class="controls">
+    <button id="nigeriaBtn" onclick="changeRegion('nigeria')">
+        🇳🇬 Nigeria
+    </button>
+
+    <button id="africaBtn" class="active" onclick="changeRegion('africa')">
+        🌍 Africa
+    </button>
+
+    <button id="worldBtn" onclick="changeRegion('world')">
+        🌎 World
+    </button>
+
+    <input
+        id="search"
+        class="search"
+        placeholder="Search callsign..."
+        oninput="searchAircraft()"
+    >
+
+    <button onclick="loadFlights()">↻ Refresh</button>
+</div>
+
+<div class="stats">
+
+    <div class="card">
+        <div class="label">AIRCRAFT</div>
+        <div class="number" id="total">0</div>
+    </div>
+
+    <div class="card">
+        <div class="label">CLIMBING</div>
+        <div class="number" id="climbing">0</div>
+    </div>
+
+    <div class="card">
+        <div class="label">DESCENDING</div>
+        <div class="number" id="descending">0</div>
+    </div>
+
+    <div class="card">
+        <div class="label">CRUISING</div>
+        <div class="number" id="cruising">0</div>
+    </div>
+
+    <div class="card">
+        <div class="label">ON GROUND</div>
+        <div class="number" id="ground">0</div>
+    </div>
+
+</div>
+
+<div id="map"></div>
+
+<div class="panel" id="panel">
+    <div class="close" onclick="closePanel()">×</div>
+
+    <h2 id="aircraftTitle">Aircraft</h2>
+
+    <div class="row">
+        <span>Airline</span>
+        <strong id="airline">-</strong>
+    </div>
+
+    <div class="row">
+        <span>Callsign</span>
+        <strong id="callsign">-</strong>
+    </div>
+
+    <div class="row">
+        <span>ICAO24</span>
+        <strong id="icao">-</strong>
+    </div>
+
+    <div class="row">
+        <span>From</span>
+        <strong id="from">-</strong>
+    </div>
+
+    <div class="row">
+        <span>Destination</span>
+        <strong id="destination">-</strong>
+    </div>
+
+    <div class="row">
+        <span>Status</span>
+        <strong class="status" id="status">-</strong>
+    </div>
+
+    <div class="row">
+        <span>Altitude</span>
+        <strong id="altitude">-</strong>
+    </div>
+
+    <div class="row">
+        <span>Speed</span>
+        <strong id="speed">-</strong>
+    </div>
+
+    <div class="row">
+        <span>Heading</span>
+        <strong id="heading">-</strong>
+    </div>
+
+    <div class="row">
+        <span>Vertical rate</span>
+        <strong id="vertical">-</strong>
+    </div>
+</div>
+
+<div class="loading" id="loading">
+    Loading live aircraft...
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+
+let map;
+let markers = [];
+let aircraftData = [];
+let currentRegion = "africa";
+
+const regionCenters = {
+    nigeria: [9.0, 8.0],
+    africa: [5.0, 20.0],
+    world: [20, 0]
+};
+
+const regionZoom = {
+    nigeria: 5,
+    africa: 3,
+    world: 2
+};
+
+function startMap() {
+
+    map = L.map("map").setView(
+        regionCenters[currentRegion],
+        regionZoom[currentRegion]
+    );
+
+    L.tileLayer(
+        "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+        {
+            attribution: "© OpenStreetMap contributors"
+        }
+    ).addTo(map);
+}
+
+function aircraftIcon(heading) {
+
+    return L.divIcon({
+        className: "",
+        html: `
+            <div style="
+                font-size:22px;
+                transform:rotate(${heading || 0}deg);
+                filter:drop-shadow(0 1px 2px black);
+            ">✈</div>
+        `,
+        iconSize: [25,25],
+        iconAnchor: [12,12]
+    });
+}
+
+function clearMarkers() {
+
+    markers.forEach(marker => map.removeLayer(marker));
+    markers = [];
+}
+
+function loadFlights() {
+
+    document.getElementById("loading").style.display = "block";
+
+    fetch("/api/flights?region=" + currentRegion)
+        .then(response => response.json())
+        .then(data => {
+
+            document.getElementById("loading").style.display = "none";
+
+            if (!data.success) {
+                alert("Radar connection error: " + data.error);
+                return;
+            }
+
+            aircraftData = data.aircraft;
+
+            document.getElementById("total").textContent =
+                data.statistics.total;
+
+            document.getElementById("climbing").textContent =
+                data.statistics.climbing;
+
+            document.getElementById("descending").textContent =
+                data.statistics.descending;
+
+            document.getElementById("cruising").textContent =
+                data.statistics.cruising;
+
+            document.getElementById("ground").textContent =
+                data.statistics.on_ground;
+
+            drawAircraft(aircraftData);
+
+        })
+        .catch(error => {
+
+            document.getElementById("loading").style.display = "none";
+
+            alert("Could not connect to Christopher Flight Tracker.");
+            console.error(error);
+
+        });
+}
+
+function drawAircraft(list) {
+
+    clearMarkers();
+
+    list.forEach(aircraft => {
+
+        if (
+            aircraft.latitude === null ||
+            aircraft.longitude === null
+        ) {
+            return;
+        }
+
+        const marker = L.marker(
+            [
+                aircraft.latitude,
+                aircraft.longitude
+            ],
+            {
+                icon: aircraftIcon(aircraft.heading)
+            }
+        ).addTo(map);
+
+        marker.on("click", () => {
+            showAircraft(aircraft);
+        });
+
+        markers.push(marker);
+    });
+}
+
+async function showAircraft(a) {
+
+    document.getElementById("panel").style.display = "block";
+
+    document.getElementById("aircraftTitle").textContent =
+        "✈ " + a.callsign;
+
+    document.getElementById("airline").textContent =
+        a.airline;
+
+    document.getElementById("callsign").textContent =
+        a.callsign;
+
+    document.getElementById("icao").textContent =
+        a.icao24;
+
+    document.getElementById("from").textContent =
+        a.origin_country;
+
+    document.getElementById("destination").textContent =
+        "Looking up route...";
+
+    document.getElementById("status").textContent =
+        a.status;
+
+    document.getElementById("altitude").textContent =
+        a.altitude_ft
+        ? a.altitude_ft.toLocaleString() + " ft"
+        : "N/A";
+
+    document.getElementById("speed").textContent =
+        a.speed_knots
+        ? a.speed_knots + " knots"
+        : "N/A";
+
+    document.getElementById("heading").textContent =
+        a.heading !== null
+        ? Math.round(a.heading) + "°"
+        : "N/A";
+
+    document.getElementById("vertical").textContent =
+        a.vertical_rate_fpm !== null
+        ? a.vertical_rate_fpm + " ft/min"
+        : "N/A";
+
+    map.setView(
+        [a.latitude, a.longitude],
+        Math.max(map.getZoom(), 7)
+    );
+
+    try {
+
+        const response = await fetch(
+            "/api/route/" + a.icao24
+        );
+
+        const route = await response.json();
+
+        if (
+            route.success &&
+            route.available
+        ) {
+
+            const departure =
+                route.departure || "Unknown";
+
+            const arrival =
+                route.arrival || "Unknown";
+
+            document.getElementById("from").textContent =
+                departure;
+
+            document.getElementById("destination").textContent =
+                arrival;
+
+        } else {
+
+            document.getElementById("destination").textContent =
+                "Route unavailable";
+
+        }
+
+    } catch (error) {
+
+        console.error(error);
+
+        document.getElementById("destination").textContent =
+            "Route unavailable";
+    }
+}
+
+function closePanel() {
+    document.getElementById("panel").style.display = "none";
+}
+
+function changeRegion(region) {
+
+    currentRegion = region;
+
+    document
+        .querySelectorAll(".controls button")
+        .forEach(btn => btn.classList.remove("active"));
+
+    document.getElementById(
+        region + "Btn"
+    ).classList.add("active");
+
+    map.setView(
+        regionCenters[region],
+        regionZoom[region]
+    );
+
+    loadFlights();
+}
+
+function searchAircraft() {
+
+    const query =
+        document.getElementById("search")
+        .value
+        .trim()
+        .toUpperCase();
+
+    if (!query) {
+        drawAircraft(aircraftData);
+        return;
+    }
+
+    const results = aircraftData.filter(a =>
+        a.callsign.toUpperCase().includes(query) ||
+        a.icao24.toUpperCase().includes(query) ||
+        a.airline.toUpperCase().includes(query)
+    );
+
+    drawAircraft(results);
+
+    if (results.length === 1) {
+        showAircraft(results[0]);
+    }
+}
+
+startMap();
+loadFlights();
+
+setInterval(loadFlights, 90000);
+
+</script>
+
+</body>
+</html>
